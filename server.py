@@ -8,23 +8,37 @@ app = Flask(__name__)
 # Enable CORS for all routes to allow the Next.js frontend to connect
 CORS(app)
 
-# Load the school information context
+# Load the school information context dynamically from school_info.txt
 try:
     with open("school_info.txt", "r", encoding="utf-8") as f:
-        system_context = f.read()
+        school_context = f.read()
 except FileNotFoundError:
-    system_context = "Fallback context: St. Anthony's High School Chatbot."
+    school_context = "Fallback context: St. Anthony's Sr. Sec. School, Barabanki Chatbot."
     print("Warning: school_info.txt not found. Using fallback context.")
+
+SYSTEM_INSTRUCTION = f"""You are the official AI Assistant for St. Anthony's Sr. Sec. School, Barabanki.
+Answer questions from students, parents, and visitors accurately, politely, and clearly using ONLY the official school records provided below.
+
+Official School Information:
+{school_context}
+
+Rules for responding:
+1. If the user asks about the Principal or the Principal's Message, provide the Principal's name (Fr. Prakash Soreng) and the Principal's Message from the Official School Information above.
+2. If a user asks a question that is outside the scope of the Official School Information or not mentioned in the records, do NOT fail or return an empty response—politely reply: "I don't have that specific information in my official school records. Please contact the school office directly at 05248-222568 or stanthonybbk@yahoo.com for further assistance."
+3. Format responses cleanly using Markdown (bullet points and bold text where helpful).
+"""
 
 # Retrieve the API key securely from environment variables
 API_KEY = os.environ.get("GEMINI_API_KEY")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+
 
 @app.route("/api/chat", methods=["POST"])
 def chat():
     if not API_KEY:
         return jsonify({"error": "API Key not configured on the server."}), 500
 
-    data = request.get_json()
+    data = request.get_json(silent=True)
     if not data or "history" not in data:
         return jsonify({"error": "Invalid payload. 'history' is required."}), 400
 
@@ -32,35 +46,67 @@ def chat():
     contents = []
 
     # Map the frontend history format to the Gemini API format
-    # Frontend format: { "role": "user" | "ai", "content": "..." }
+    # Frontend sends: { "role": "user" | "ai" | "model", "content" | "text": "..." }
     for msg in history:
         role = "user" if msg.get("role") == "user" else "model"
-        contents.append({"role": role, "parts": [{"text": msg.get("content", "")}]})
+        text = (msg.get("content") or msg.get("text") or "").strip()
+
+        if not text:
+            continue
+
+        # Gemini API requires the first turn in `contents` to be from "user"
+        # Skip the initial hardcoded welcome message from the assistant
+        if not contents and role == "model":
+            continue
+
+        # Prevent consecutive messages with the same role (which happens if a prior turn failed)
+        # If two "user" messages appear back-to-back, replace the failed/unanswered turn with the latest one
+        if contents and contents[-1]["role"] == role:
+            if role == "user":
+                contents[-1]["parts"] = [{"text": text}]
+            else:
+                contents[-1]["parts"][0]["text"] += "\n\n" + text
+        else:
+            contents.append({"role": role, "parts": [{"text": text}]})
+
+    if not contents:
+        return jsonify({"error": "No user message found in history."}), 400
 
     payload = {
         "systemInstruction": {
-            "parts": [{"text": system_context}]
+            "parts": [{"text": SYSTEM_INSTRUCTION}]
         },
         "contents": contents
     }
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={API_KEY}"
     headers = {"Content-Type": "application/json"}
 
     try:
-        response = requests.post(url, headers=headers, data=json.dumps(payload))
+        response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=30)
         response_data = response.json()
 
-        if "candidates" in response_data:
-            reply = response_data["candidates"][0]["content"]["parts"][0]["text"]
-            return jsonify({"reply": reply}), 200
+        candidates = response_data.get("candidates")
+        if candidates and len(candidates) > 0:
+            content_obj = candidates[0].get("content", {})
+            parts = content_obj.get("parts", [])
+            if parts and "text" in parts[0]:
+                reply = parts[0]["text"]
+                return jsonify({"reply": reply}), 200
+
+            # Handle cases where the model stopped early without text parts
+            return jsonify({
+                "reply": "I don't have that specific information in my official school records. Please contact the school administration directly for assistance."
+            }), 200
         else:
             print("API Error:", response_data)
-            return jsonify({"error": "Failed to generate a response from the AI."}), 502
+            error_detail = response_data.get("error", {}).get("message", "Failed to generate a response from the AI.")
+            return jsonify({"error": error_detail}), 502
     except Exception as e:
         print("Server Error:", str(e))
         return jsonify({"error": "An internal server error occurred."}), 500
 
+
 if __name__ == "__main__":
-    # Run the server on port 5000
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True)
