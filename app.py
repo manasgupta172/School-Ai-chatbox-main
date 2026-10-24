@@ -51,7 +51,7 @@ try:
     if "messages" not in st.session_state:
         welcome_msg = (
             "Hello! How can I help you today?\n\n"
-            "**I am the official St. Anthony's Sr. Sec. School Chatbot, proudly developed independently by Manas, a Class 12 PCM student.**\n\n"
+            "**I am the official St. Anthony's Sr. Sec. School Chatbot, proudly developed by Manas Gupta, a Class 12 PCM student.**\n\n"
             "If you have any questions about the school—such as its admissions, timings, staff, student council, school rules, or history—feel free to ask!"
         )
         st.session_state.messages = [{"role": "assistant", "content": welcome_msg}]
