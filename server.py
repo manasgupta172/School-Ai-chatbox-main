@@ -30,7 +30,13 @@ Rules for responding:
 
 # Retrieve the API key securely from environment variables
 API_KEY = os.environ.get("GEMINI_API_KEY")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+
+# Ordered list of Gemini models to try automatically
+CANDIDATE_MODELS = [
+    os.environ.get("GEMINI_MODEL", "gemini-3.5-flash"),
+    "gemini-3.8-flash",
+    "gemini-2.5-flash",
+]
 
 
 @app.route("/api/chat", methods=["POST"])
@@ -79,32 +85,41 @@ def chat():
         "contents": contents
     }
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={API_KEY}"
     headers = {"Content-Type": "application/json"}
+    last_error = "Failed to generate a response from the AI."
 
-    try:
-        response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=30)
-        response_data = response.json()
+    # Try candidate models in order (gemini-3.5-flash -> gemini-3.8-flash -> gemini-2.5-flash)
+    seen_models = set()
+    for model_name in CANDIDATE_MODELS:
+        if not model_name or model_name in seen_models:
+            continue
+        seen_models.add(model_name)
 
-        candidates = response_data.get("candidates")
-        if candidates and len(candidates) > 0:
-            content_obj = candidates[0].get("content", {})
-            parts = content_obj.get("parts", [])
-            if parts and "text" in parts[0]:
-                reply = parts[0]["text"]
-                return jsonify({"reply": reply}), 200
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={API_KEY}"
+        try:
+            response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=30)
+            response_data = response.json()
 
-            # Handle cases where the model stopped early without text parts
-            return jsonify({
-                "reply": "I don't have that specific information in my official school records. Please contact the school administration directly for assistance."
-            }), 200
-        else:
-            print("API Error:", response_data)
-            error_detail = response_data.get("error", {}).get("message", "Failed to generate a response from the AI.")
-            return jsonify({"error": error_detail}), 502
-    except Exception as e:
-        print("Server Error:", str(e))
-        return jsonify({"error": "An internal server error occurred."}), 500
+            candidates = response_data.get("candidates")
+            if candidates and len(candidates) > 0:
+                content_obj = candidates[0].get("content", {})
+                parts = content_obj.get("parts", [])
+                if parts and "text" in parts[0]:
+                    reply = parts[0]["text"]
+                    return jsonify({"reply": reply}), 200
+
+                # Handle cases where the model stopped early without text parts
+                return jsonify({
+                    "reply": "I don't have that specific information in my official school records. Please contact the school administration directly at 05248-222568 or stanthonybbk@yahoo.com for assistance."
+                }), 200
+            else:
+                last_error = response_data.get("error", {}).get("message", last_error)
+                print(f"API Error with {model_name}:", response_data)
+        except Exception as e:
+            last_error = str(e)
+            print(f"Server Error with {model_name}:", last_error)
+
+    return jsonify({"error": last_error}), 502
 
 
 if __name__ == "__main__":
