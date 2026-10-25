@@ -33,8 +33,8 @@ Rules for responding:
 
 # Retrieve the API key securely from environment variables
 API_KEY = os.environ.get("GEMINI_API_KEY")
-# Use gemini-3.8-flash (or gemini-3.5-flash) with only 1 API call per user question to save quota
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+# Use gemini-flash-latest directly (from Google AI Studio cURL quickstart)
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
 
 
 @app.route("/api/chat", methods=["POST"])
@@ -83,8 +83,11 @@ def chat():
         "contents": contents
     }
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={API_KEY}"
-    headers = {"Content-Type": "application/json"}
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+    headers = {
+        "Content-Type": "application/json",
+        "X-goog-api-key": API_KEY,
+    }
 
     try:
         response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=30)
@@ -94,7 +97,7 @@ def chat():
         if candidates and len(candidates) > 0:
             content_obj = candidates[0].get("content", {})
             parts = content_obj.get("parts", [])
-            # Collect all text parts safely (supports multi-part / thinking responses in Gemini 3.x)
+            # Collect all text parts safely
             text_chunks = [p["text"] for p in parts if isinstance(p, dict) and p.get("text")]
             if text_chunks:
                 reply = "".join(text_chunks)
