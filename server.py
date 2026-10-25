@@ -29,12 +29,13 @@ def load_school_info():
 def build_system_context(info: str) -> str:
     return (
         "You are the official AI Assistant for St. Anthony's Sr. Sec. School, Barabanki. "
-        "Answer questions naturally, concisely, and politely using ONLY the official school information below. "
+        "Answer questions naturally, concisely, and politely using ONLY the official school information below.\n"
         "Important rules:\n"
-        "1. Do NOT dump huge raw paragraphs when a user asks a specific question. Give a clean, well-formatted, direct answer.\n"
-        "2. When asked about the Principal or his message, state that the Principal is **Fr. Prakash Soreng** and share the **Principal's Message** section clearly.\n"
-        "3. Be smart with spelling variations and honorifics for teachers/staff (for example, 'Lily ma'am', 'Lily', or 'Lily Mishra' refers to **Mrs. Lilly Mishra** (PGT); 'Praveen' refers to **Ms. Rana Parveen** or **Ms. Kuba Parveen** (PRT/PPRT); 'Father' or 'Fr.' refers to priests/administration).\n"
-        "4. If a detail is genuinely not in the school information below, politely say: "
+        "1. Give clean, well-formatted, direct answers using Markdown. Never dump huge raw unformatted paragraphs.\n"
+        "2. Developer / Creator: If asked about **Manas**, **Manas Gupta**, or who created/developed this chatbot, state that **Manas Gupta** is a Class 12 PCM student at St. Anthony's Sr. Sec. School, Barabanki (and was also the Yellow House Prefect in 2024–25) who independently developed this official AI Chatbot.\n"
+        "3. Principal & Message: When asked about the Principal or his message, state that the Principal is **Fr. Prakash Soreng** (2025 – Present) and share the **Principal's Message** section clearly.\n"
+        "4. Staff & Student Council Names: Handle spelling variations and honorifics intelligently (e.g., 'Lily ma'am' or 'Lily' -> **Mrs. Lilly Mishra** (PGT); 'Praveen' -> **Ms. Rana Parveen** & **Ms. Kuba Parveen** (PRT/PPRT); 'Swati Gupta' -> **Mrs. Swati Gupta** (Special Educator); never confuse 'Manas Gupta' with 'Mrs. Swati Gupta').\n"
+        "5. If a detail is genuinely not in the school information below, politely say: "
         "'I do not have that specific information in my official school records. Please contact the school office directly at 05248-222568 or stanthonybbk@yahoo.com.'\n\n"
         + info
     )
@@ -54,43 +55,49 @@ def extract_sections(info: str):
     return sections
 
 
-def find_staff_matches(query: str, info: str):
-    """Exact, ranked staff name matcher so 'who is lily mishra' ONLY returns Mrs. Lilly Mishra and never matches random sentences."""
+def normalize_word(word: str) -> str:
+    w = re.sub(r"(.)\1+", r"\1", word.lower())
+    w = w.replace("parveen", "praveen").replace("praveen", "parveen")
+    w = w.replace("shrivastav", "srivastav").replace("srivastava", "srivastav")
+    return w
+
+
+def find_people_in_records(query: str, info: str):
+    """Accurately finds any person (Teacher, Principal, Staff, or Student Council member) in school_info.txt.
+    Requires ALL name words in the user's query to match the person's name so 'manas gupta' NEVER matches 'Mrs. Swati Gupta'.
+    """
     q_lower = query.lower()
     ignore = {
-        "who", "what", "is", "are", "the", "about", "tell", "me", "maam", "ma", "am",
+        "who", "what", "is", "are", "was", "the", "about", "tell", "me", "maam", "ma", "am",
         "mam", "madam", "sir", "teacher", "staff", "faculty", "miss", "mrs", "mr",
         "ms", "dr", "fr", "father", "sister", "sr", "in", "of", "at", "school",
-        "anthony", "anthonys", "please", "know", "do", "you", "message", "his", "her"
+        "anthony", "anthonys", "please", "know", "do", "you", "message", "his", "her", "role"
     }
     tokens = [t for t in re.findall(r"[a-z]+", q_lower) if t not in ignore and len(t) >= 3]
     if not tokens:
         return []
 
-    def normalize(word: str) -> str:
-        # Collapse double letters ("lilly" -> "lily") and common spelling variations
-        w = re.sub(r"(.)\1+", r"\1", word.lower())
-        w = w.replace("parveen", "praveen").replace("praveen", "parveen")
-        w = w.replace("shrivastav", "srivastav").replace("srivastava", "srivastav")
-        return w
+    norm_tokens = [normalize_word(t) for t in tokens]
 
-    norm_tokens = [normalize(t) for t in tokens]
+    # Build a complete directory of people from school_info.txt + known developer credit
+    people_directory = [
+        (
+            "Manas Gupta",
+            "Class 12 PCM student at St. Anthony's Sr. Sec. School, Barabanki (and Yellow House Prefect in the 2024–25 Student Cabinet) who independently developed this official St. Anthony's AI Chatbot",
+        )
+    ]
 
-    # Extract ONLY clean person names (starting with Mrs., Mr., Ms., Sr., Fr., Dr.) and their category
+    # 1. Extract titled staff/admin names (Mrs., Mr., Ms., Sr., Fr., Dr.)
     person_pattern = re.compile(
         r"\b((?:Mrs?\.|Ms\.|Sr\.|Fr\.|Dr\.)\s+[A-Z][A-Za-z.\s]{2,35}?)(?=\s*(?:[,;.\n]|—|-|\(|$))"
     )
 
-    candidates = []
-    seen_names = set()
-
-    # Determine role category based on surrounding section text
+    seen_entries = {"Manas Gupta"}
     for line in info.splitlines():
         line_s = line.strip()
         if not line_s:
             continue
 
-        # Split line into category chunks if PGT:, TGT:, PRT / PPRT:, Specialist staff: appear inline
         chunks = re.split(r"(?=(?:PGT:|TGT:|PRT / PPRT:|Specialist staff:))", line_s)
         for chunk in chunks:
             role_label = "Faculty / Administration"
@@ -105,43 +112,62 @@ def find_staff_matches(query: str, info: str):
 
             for match in person_pattern.finditer(chunk):
                 person_name = match.group(1).strip().rstrip(".,;:")
-                # Skip historical bishops/priests if already covered or keep clean role
-                if person_name in seen_names:
-                    continue
-                name_words = [
-                    normalize(w)
-                    for w in re.findall(r"[a-zA-Z]+", person_name)
-                    if w.lower() not in {"mrs", "mr", "ms", "sr", "fr", "dr"} and len(w) >= 3
-                ]
-                if not name_words:
-                    continue
+                # Check if there is an explicit role after an em-dash right after the name
+                after_text = chunk[match.end(): match.end() + 60]
+                dash_role = re.match(r"^\s*[—\-]\s*([^.;,\n]+)", after_text)
+                specific_role = f"{dash_role.group(1).strip()} ({role_label})" if dash_role else role_label
 
-                # Count how many query tokens match this person's actual name words
-                matched_count = 0
-                for nt in norm_tokens:
-                    if any(nt == nw or (len(nt) >= 4 and len(nw) >= 4 and (nt in nw or nw in nt)) for nw in name_words):
-                        matched_count += 1
+                if person_name not in seen_entries:
+                    seen_entries.add(person_name)
+                    people_directory.append((person_name, specific_role))
 
-                if matched_count > 0:
-                    seen_names.add(person_name)
-                    candidates.append((matched_count, person_name, role_label))
+    # 2. Extract Student Council / Cabinet names from lines with "—" or ":" in Student Council section
+    for heading, body, _ in extract_sections(info):
+        if any(k in heading.lower() for k in ("council", "cabinet", "house")):
+            for line in body.splitlines():
+                # Match patterns like "Head Boy: Name" or "Name — Role"
+                for m in re.finditer(r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s*[—\-:]\s*([^.,;\n]+)", line):
+                    p_name = m.group(1).strip()
+                    p_role = m.group(2).strip()
+                    if p_name not in seen_entries and len(p_name.split()) <= 4:
+                        seen_entries.add(p_name)
+                        people_directory.append((p_name, f"{p_role} (Student Council)"))
 
-    if not candidates:
+    # Match user tokens against each person in the directory
+    # Rule: EVERY query token must match a word in the person's name!
+    matched_results = []
+    for person_name, role_desc in people_directory:
+        name_words = [
+            normalize_word(w)
+            for w in re.findall(r"[a-zA-Z]+", person_name)
+            if w.lower() not in {"mrs", "mr", "ms", "sr", "fr", "dr"} and len(w) >= 2
+        ]
+        if not name_words:
+            continue
+
+        all_tokens_matched = True
+        for nt in norm_tokens:
+            if not any(
+                nt == nw or (len(nt) >= 4 and len(nw) >= 4 and (nt in nw or nw in nt))
+                for nw in name_words
+            ):
+                all_tokens_matched = False
+                break
+
+        if all_tokens_matched:
+            matched_results.append((len(norm_tokens), person_name, role_desc))
+
+    if not matched_results:
         return []
 
-    # Keep ONLY the highest-scoring matches (e.g., if user typed "lily mishra" (2 words),
-    # ONLY return Mrs. Lilly Mishra (score 2), NOT other teachers named Mishra (score 1)!)
-    max_score = max(c[0] for c in candidates)
-    best_matches = [
-        f"**{name}** is a **{role}** at St. Anthony's Sr. Sec. School, Barabanki."
-        for score, name, role in candidates
-        if score == max_score
+    return [
+        f"**{name}** — {role_desc} at St. Anthony's Sr. Sec. School, Barabanki."
+        for _, name, role_desc in matched_results
     ]
-    return best_matches
 
 
 def local_school_info_answer(query: str, info: str) -> str:
-    """Concise, natural fallback answer engine over school_info.txt when Gemini API is busy."""
+    """Comprehensive, natural fallback answer engine over school_info.txt."""
     q = query.lower().strip()
     sections = extract_sections(info)
 
@@ -153,7 +179,15 @@ def local_school_info_answer(query: str, info: str) -> str:
             "**School Timings**, **Admissions**, **School Uniform**, **Student Council**, **Faculty & Staff**, or **School Rules**!"
         )
 
-    # 2. Principal & Principal's Message
+    # 2. Questions about Manas / Manas Gupta / Developer of the Chatbot
+    if "manas" in q or ("who" in q and any(w in q for w in ("made", "created", "developed", "built", "developer", "creator"))):
+        return (
+            "**Manas Gupta** is a **Class 12 PCM student** at St. Anthony's Sr. Sec. School, Barabanki "
+            "(and served as the **Yellow House Prefect** in the 2024–25 Student Cabinet). "
+            "He independently designed and developed this official **St. Anthony's Sr. Sec. School AI Chatbot**!"
+        )
+
+    # 3. Principal & Principal's Message
     if any(k in q for k in ("principal", "prakash", "soreng")):
         principal_msg = ""
         for heading, body, _ in sections:
@@ -169,87 +203,94 @@ def local_school_info_answer(query: str, info: str) -> str:
             )
         return "The Principal of St. Anthony's Sr. Sec. School, Barabanki is **Fr. Prakash Soreng** (serving from 2025 to present)."
 
-    # 3. Specific Teacher / Staff Lookup (e.g. "who is lily mishra", "who is lily ma'am", "who is Praveen")
-    staff_matches = find_staff_matches(query, info)
-    if staff_matches and not any(k in q for k in ("timing", "uniform", "fee", "admission", "stream", "syllabus", "history")):
-        if len(staff_matches) == 1:
-            return f"Based on our official school records, {staff_matches[0]}"
-        else:
-            return (
-                "Based on our official school records, here are the matching faculty members:\n\n"
-                + "\n".join(f"- {m}" for m in staff_matches)
-            )
+    # 4. Specific Person Lookup (Teachers, Staff, Admin, Student Council)
+    if not any(k in q for k in ("timing", "uniform", "fee", "admission", "stream", "syllabus", "history", "facility", "facilities", "rule", "exam", "calendar", "contact")):
+        people_matches = find_people_in_records(query, info)
+        if people_matches:
+            if len(people_matches) == 1:
+                return f"Based on our official school records:\n\n{people_matches[0]}"
+            else:
+                return (
+                    "Based on our official school records, here are the matching members:\n\n"
+                    + "\n".join(f"- {m}" for m in people_matches)
+                )
 
-    # 4. School Timings
+    # 5. School Timings
     if any(k in q for k in ("timing", "time", "hours", "schedule", "summer", "winter", "recess")):
         for heading, body, _ in sections:
             if "timing" in heading.lower() or "schedule" in heading.lower():
                 return f"### {heading}\n\n{body}"
 
-    # 5. School Uniform
+    # 6. School Uniform
     if any(k in q for k in ("uniform", "dress", "blazer", "shirt", "tie", "skirt", "trouser")):
         for heading, body, _ in sections:
             if "uniform" in heading.lower():
                 return f"### {heading}\n\n{body}"
 
-    # 6. Student Council & Houses
+    # 7. Student Council & Houses
     if any(k in q for k in ("council", "head boy", "head girl", "captain", "prefect", "house", "cabinet")):
         for heading, body, _ in sections:
             if "council" in heading.lower() or "house" in heading.lower() or "cabinet" in heading.lower():
                 return f"### {heading}\n\n{body}"
 
-    # 7. Admissions & Withdrawals
+    # 8. Admissions & Withdrawals
     if any(k in q for k in ("admission", "withdraw", "tc", "transfer certificate", "age criteria", "document", "registration")):
         for heading, body, _ in sections:
             if "admission" in heading.lower():
                 return f"### {heading}\n\n{body}"
 
-    # 8. Fee Structure
+    # 9. Fee Structure
     if any(k in q for k in ("fee", "payment", "installment", "tuition")):
         for heading, body, _ in sections:
             if "fee" in heading.lower():
                 return f"### {heading}\n\n{body}"
 
-    # 9. Curriculum & Streams
+    # 10. Curriculum & Streams
     if any(k in q for k in ("stream", "subject", "curriculum", "syllabus", "science", "commerce", "ncert", "cbse")):
         for heading, body, _ in sections:
             if "curriculum" in heading.lower() or "stream" in heading.lower():
                 return f"### {heading}\n\n{body}"
 
-    # 10. Examinations & Promotion
+    # 11. Examinations & Promotion
     if any(k in q for k in ("exam", "promotion", "grading", "attendance", "pass")):
         for heading, body, _ in sections:
             if "examination" in heading.lower() or "promotion" in heading.lower():
                 return f"### {heading}\n\n{body}"
 
-    # 11. Rules & Code of Conduct
+    # 12. Rules & Code of Conduct
     if any(k in q for k in ("rule", "discipline", "conduct", "mobile", "phone", "late", "punish")):
         for heading, body, _ in sections:
             if "conduct" in heading.lower() or "rule" in heading.lower() or "discipline" in heading.lower():
                 return f"### {heading}\n\n{body}"
 
-    # 12. Facilities & Infrastructure
+    # 13. Facilities & Infrastructure
     if any(k in q for k in ("facility", "facilities", "infrastructure", "lab", "library", "transport", "bus", "playground", "cctv")):
         for heading, body, _ in sections:
             if "infrastructure" in heading.lower() or "facilities" in heading.lower():
                 return f"### {heading}\n\n{body}"
 
-    # 13. Managing Committee
+    # 14. Managing Committee
     if "managing committee" in q or "committee" in q or "minority" in q:
         for heading, body, _ in sections:
             if "managing" in heading.lower():
                 return f"### {heading}\n\n{body}"
 
-    # 14. History & About
+    # 15. History & About
     if any(k in q for k in ("history", "founded", "patron", "antony", "diocese", "bishop", "about", "mission", "motto")):
         for heading, body, _ in sections:
             if any(w in heading.lower() for w in ("mission", "history", "about")):
                 return f"### {heading}\n\n{body}"
 
-    # 15. Contact Info
+    # 16. Contact Info
     if any(k in q for k in ("contact", "phone", "email", "address", "location", "website", "where")):
         for heading, body, _ in sections:
             if "contact" in heading.lower() or "st. anthony" in heading.lower():
+                return f"### {heading}\n\n{body}"
+
+    # 17. Full Staff / Faculty list if user asks generally about teachers/staff
+    if any(k in q for k in ("staff", "teacher", "teachers", "faculty")):
+        for heading, body, _ in sections:
+            if "staff" in heading.lower() or "faculty" in heading.lower() or "administration" in heading.lower():
                 return f"### {heading}\n\n{body}"
 
     return (
@@ -280,6 +321,7 @@ def chat():
     school_info = load_school_info()
     system_context = build_system_context(school_info)
 
+    # Use clean, standard Gemini payload (no experimental thinkingConfig that causes 400 errors on gemini-3.5-flash)
     payload = {
         "systemInstruction": {
             "parts": [{"text": system_context}]
@@ -289,14 +331,7 @@ def chat():
                 "role": "user",
                 "parts": [{"text": latest_user_text}]
             }
-        ],
-        "generationConfig": {
-            "thinkingConfig": {
-                "thinkingBudget": 0
-            },
-            "maxOutputTokens": 800,
-            "temperature": 0.3
-        }
+        ]
     }
 
     headers = {
@@ -305,19 +340,11 @@ def chat():
     }
 
     if API_KEY:
-        for model_name in ("gemini-flash-latest", "gemini-3.5-flash", "gemini-3.8-flash"):
+        for model_name in ("gemini-3.5-flash", "gemini-3.8-flash", "gemini-flash-latest"):
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={API_KEY}"
             try:
-                response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=12)
+                response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=18)
                 response_data = response.json()
-
-                if response.status_code == 400 and "thinkingConfig" in json.dumps(response_data):
-                    simple_payload = {
-                        "systemInstruction": payload["systemInstruction"],
-                        "contents": payload["contents"],
-                    }
-                    response = requests.post(url, headers=headers, data=json.dumps(simple_payload), timeout=12)
-                    response_data = response.json()
 
                 if "candidates" in response_data and len(response_data["candidates"]) > 0:
                     candidate = response_data["candidates"][0]
@@ -335,7 +362,7 @@ def chat():
                 print(f"Error with {model_name}: {e}")
                 continue
 
-    # Instant, clean, concise fallback from school_info.txt if Google's API is busy
+    # Instant, accurate fallback from school_info.txt if Google's API is busy
     fallback_reply = local_school_info_answer(latest_user_text, school_info)
     return jsonify({"reply": fallback_reply}), 200
 
