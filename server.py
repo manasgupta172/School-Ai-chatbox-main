@@ -34,6 +34,16 @@ def load_system_context():
     )
 
 
+# Ordered list of Gemini models:
+# Automatically falls back to gemini-3.5-flash-lite if gemini-3.8-flash / gemini-3.6-flash / gemini-3.5-flash reach their rate limit or high demand
+GEMINI_MODELS = (
+    "gemini-3.8-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+)
+
+
 @app.route("/api/chat", methods=["POST"])
 def chat():
     if not API_KEY:
@@ -84,39 +94,34 @@ def chat():
     headers = {"Content-Type": "application/json"}
     last_error = "Failed to generate a response from the AI."
 
-    # 100% Real Gemini AI ONLY — no scripted fallback!
-    # Put gemini-3.5-flash FIRST (since it works reliably on your account) and gemini-3.8-flash second
-    for model_name in ("gemini-3.5-flash", "gemini-3.8-flash"):
+    # 100% Real Gemini AI ONLY — tries models in order and falls back to gemini-3.5-flash-lite if limits are reached
+    for model_name in GEMINI_MODELS:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={API_KEY}"
-        for attempt in range(2):
-            try:
-                response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=20)
-                response_data = response.json()
+        try:
+            response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=15)
+            response_data = response.json()
 
-                if "candidates" in response_data and len(response_data["candidates"]) > 0:
-                    candidate = response_data["candidates"][0]
-                    parts = candidate.get("content", {}).get("parts", [])
-                    text_chunks = [
-                        p["text"]
-                        for p in parts
-                        if isinstance(p, dict) and p.get("text") and not p.get("thought")
-                    ]
-                    if not text_chunks:
-                        text_chunks = [p["text"] for p in parts if isinstance(p, dict) and p.get("text")]
-                    if text_chunks:
-                        return jsonify({"reply": "".join(text_chunks)}), 200
+            if "candidates" in response_data and len(response_data["candidates"]) > 0:
+                candidate = response_data["candidates"][0]
+                parts = candidate.get("content", {}).get("parts", [])
+                text_chunks = [
+                    p["text"]
+                    for p in parts
+                    if isinstance(p, dict) and p.get("text") and not p.get("thought")
+                ]
+                if not text_chunks:
+                    text_chunks = [p["text"] for p in parts if isinstance(p, dict) and p.get("text")]
+                if text_chunks:
+                    return jsonify({"reply": "".join(text_chunks)}), 200
 
-                # If Google returns 503 (high demand) or 429 (rate limit), wait 2s and retry
-                last_error = response_data.get("error", {}).get("message", last_error)
-                print(f"API Error ({model_name}, attempt {attempt + 1}):", response_data)
-                if response.status_code in (429, 503) and attempt == 0:
-                    time.sleep(2)
-                    continue
-                break
-            except Exception as e:
-                last_error = str(e)
-                print(f"Server Error ({model_name}, attempt {attempt + 1}):", last_error)
-                break
+            # If this model hit its rate limit (429), high demand (503), or isn't available, immediately try the next model
+            last_error = response_data.get("error", {}).get("message", last_error)
+            print(f"API Error with {model_name} (status {response.status_code}):", last_error)
+            continue
+        except Exception as e:
+            last_error = str(e)
+            print(f"Server Error with {model_name}:", last_error)
+            continue
 
     return jsonify({"error": last_error}), 502
 
