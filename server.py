@@ -8,23 +8,26 @@ app = Flask(__name__)
 # Enable CORS for all routes to allow the Next.js frontend to connect
 CORS(app)
 
-# Load the school information context dynamically from school_info.txt
+# Always load school_info.txt relative to this script's directory so it never falls back
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SCHOOL_INFO_PATH = os.path.join(BASE_DIR, "school_info.txt")
+
 try:
-    with open("school_info.txt", "r", encoding="utf-8") as f:
+    with open(SCHOOL_INFO_PATH, "r", encoding="utf-8") as f:
         school_context = f.read()
 except FileNotFoundError:
     school_context = "Fallback context: St. Anthony's Sr. Sec. School, Barabanki Chatbot."
     print("Warning: school_info.txt not found. Using fallback context.")
 
 SYSTEM_INSTRUCTION = f"""You are the official AI Assistant for St. Anthony's Sr. Sec. School, Barabanki.
-Answer questions from students, parents, and visitors accurately, politely, and clearly using ONLY the official school records provided below.
+Answer questions from students, parents, and visitors accurately, politely, and clearly using the official school records provided below.
 
 Official School Information:
 {school_context}
 
 Rules for responding:
 1. If the user asks about the Principal or the Principal's Message, provide the Principal's name (Fr. Prakash Soreng) and the Principal's Message from the Official School Information above.
-2. If a user asks a question that is outside the scope of the Official School Information or not mentioned in the records, do NOT fail or return an empty response—politely reply: "I don't have that specific information in my official school records. Please contact the school office directly at 05248-222568 or stanthonybbk@yahoo.com for further assistance."
+2. If a user asks a question that is outside the scope of the Official School Information or not mentioned in the records, politely reply: "I don't have that specific information in my official school records. Please contact the school office directly at 05248-222568 or stanthonybbk@yahoo.com for further assistance."
 3. Format responses cleanly using Markdown (bullet points and bold text where helpful).
 """
 
@@ -33,8 +36,8 @@ API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # Ordered list of Gemini models to try automatically
 CANDIDATE_MODELS = [
-    os.environ.get("GEMINI_MODEL", "gemini-3.5-flash"),
-    "gemini-3.8-flash",
+    os.environ.get("GEMINI_MODEL", "gemini-3.8-flash"),
+    "gemini-3.5-flash",
     "gemini-2.5-flash",
 ]
 
@@ -88,7 +91,7 @@ def chat():
     headers = {"Content-Type": "application/json"}
     last_error = "Failed to generate a response from the AI."
 
-    # Try candidate models in order (gemini-3.5-flash -> gemini-3.8-flash -> gemini-2.5-flash)
+    # Try candidate models in order (gemini-3.8-flash -> gemini-3.5-flash -> gemini-2.5-flash)
     seen_models = set()
     for model_name in CANDIDATE_MODELS:
         if not model_name or model_name in seen_models:
@@ -104,8 +107,10 @@ def chat():
             if candidates and len(candidates) > 0:
                 content_obj = candidates[0].get("content", {})
                 parts = content_obj.get("parts", [])
-                if parts and "text" in parts[0]:
-                    reply = parts[0]["text"]
+                # Concatenate any non-empty text parts (handles thinking/multi-part responses)
+                text_chunks = [p["text"] for p in parts if isinstance(p, dict) and p.get("text")]
+                if text_chunks:
+                    reply = "".join(text_chunks)
                     return jsonify({"reply": reply}), 200
 
                 # Handle cases where the model stopped early without text parts
