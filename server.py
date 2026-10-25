@@ -8,16 +8,32 @@ app = Flask(__name__)
 # Enable CORS for all routes to allow the Next.js frontend to connect
 CORS(app)
 
-# Load the school information context
-try:
-    with open("school_info.txt", "r", encoding="utf-8") as f:
-        system_context = f.read()
-except FileNotFoundError:
-    system_context = "Fallback context: St. Anthony's High School Chatbot."
-    print("Warning: school_info.txt not found. Using fallback context.")
-
 # Retrieve the API key securely from environment variables
 API_KEY = os.environ.get("GEMINI_API_KEY")
+
+# Always load the latest school_info.txt relative to this file
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SCHOOL_INFO_PATH = os.path.join(BASE_DIR, "school_info.txt")
+
+
+def load_system_context():
+    try:
+        with open(SCHOOL_INFO_PATH, "r", encoding="utf-8") as f:
+            info = f.read()
+    except FileNotFoundError:
+        info = "Fallback context: St. Anthony's Sr. Sec. School Chatbot."
+        print("Warning: school_info.txt not found. Using fallback context.")
+
+    return (
+        "You are the official AI Assistant for St. Anthony's Sr. Sec. School, Barabanki. "
+        "Answer questions accurately and politely using the official school information below. "
+        "When asked about the Principal or his message, share the Principal's name (Fr. Prakash Soreng) "
+        "and the Principal Message section below. If a question is not in the school information below, "
+        "politely say: 'I do not have that specific information in my official school records. "
+        "Please contact the school office directly at 05248-222568 or stanthonybbk@yahoo.com.'\n\n"
+        + info
+    )
+
 
 @app.route("/api/chat", methods=["POST"])
 def chat():
@@ -35,7 +51,12 @@ def chat():
     # Frontend format: { "role": "user" | "ai", "content": "..." }
     for msg in history:
         role = "user" if msg.get("role") == "user" else "model"
-        contents.append({"role": role, "parts": [{"text": msg.get("content", "")}]})
+        text = (msg.get("content") or msg.get("text") or "").strip()
+        if not text:
+            continue
+        contents.append({"role": role, "parts": [{"text": text}]})
+
+    system_context = load_system_context()
 
     payload = {
         "systemInstruction": {
@@ -51,9 +72,16 @@ def chat():
         response = requests.post(url, headers=headers, data=json.dumps(payload))
         response_data = response.json()
 
-        if "candidates" in response_data:
-            reply = response_data["candidates"][0]["content"]["parts"][0]["text"]
-            return jsonify({"reply": reply}), 200
+        if "candidates" in response_data and len(response_data["candidates"]) > 0:
+            candidate = response_data["candidates"][0]
+            parts = candidate.get("content", {}).get("parts", [])
+            if parts and "text" in parts[0]:
+                reply = parts[0]["text"]
+                return jsonify({"reply": reply}), 200
+            else:
+                return jsonify({
+                    "reply": "I do not have that specific information in my official school records. Please contact the school office directly at 05248-222568 or stanthonybbk@yahoo.com."
+                }), 200
         else:
             print("API Error:", response_data)
             return jsonify({"error": "Failed to generate a response from the AI."}), 502
@@ -61,6 +89,8 @@ def chat():
         print("Server Error:", str(e))
         return jsonify({"error": "An internal server error occurred."}), 500
 
+
 if __name__ == "__main__":
     # Run the server on port 5000
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True)
