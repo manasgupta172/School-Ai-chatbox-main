@@ -76,11 +76,20 @@ def chat():
     if not contents:
         return jsonify({"error": "No user message found in history."}), 400
 
+    # Keep only recent conversation turns and disable heavy "thinking" tokens
+    # so Gemini responds in ~2-4 seconds (well under Gunicorn's 30-second worker timeout)
     payload = {
         "systemInstruction": {
             "parts": [{"text": SYSTEM_INSTRUCTION}]
         },
-        "contents": contents
+        "contents": contents[-10:],
+        "generationConfig": {
+            "thinkingConfig": {
+                "thinkingBudget": 0
+            },
+            "maxOutputTokens": 1024,
+            "temperature": 0.3
+        }
     }
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
@@ -90,20 +99,32 @@ def chat():
     }
 
     try:
-        response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=30)
+        response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=25)
         response_data = response.json()
+
+        # If the model doesn't support thinkingConfig, retry once without thinkingConfig
+        if response.status_code == 400 and "thinkingConfig" in json.dumps(response_data):
+            payload.pop("generationConfig", None)
+            response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=25)
+            response_data = response.json()
 
         candidates = response_data.get("candidates")
         if candidates and len(candidates) > 0:
             content_obj = candidates[0].get("content", {})
             parts = content_obj.get("parts", [])
-            # Collect all text parts safely
-            text_chunks = [p["text"] for p in parts if isinstance(p, dict) and p.get("text")]
+            # Collect all non-thought text parts safely
+            text_chunks = [
+                p["text"]
+                for p in parts
+                if isinstance(p, dict) and p.get("text") and not p.get("thought")
+            ]
+            if not text_chunks:
+                text_chunks = [p["text"] for p in parts if isinstance(p, dict) and p.get("text")]
+
             if text_chunks:
                 reply = "".join(text_chunks)
                 return jsonify({"reply": reply}), 200
 
-            # Handle cases where the model stopped early without text parts
             return jsonify({
                 "reply": "I don't have that specific information in my official school records. Please contact the school administration directly at 05248-222568 or stanthonybbk@yahoo.com for assistance."
             }), 200
@@ -113,7 +134,7 @@ def chat():
             return jsonify({"error": error_detail}), 502
     except Exception as e:
         print("Server Error:", str(e))
-        return jsonify({"error": "An internal server error occurred."}), 500
+        return jsonify({"error": "The AI server took too long to respond. Please try asking again."}), 500
 
 
 if __name__ == "__main__":
