@@ -1,6 +1,5 @@
 import os
 import json
-import time
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -36,91 +35,88 @@ def load_system_context():
     )
 
 
+# Try models in order if one is overloaded ("experiencing high demand") on Google's servers
+MODELS_TO_TRY = [
+    "gemini-3.8-flash",
+    "gemini-3.5-flash",
+    "gemini-3.8-flash-lite",
+    "gemini-3.5-flash-lite",
+    "gemini-2.0-flash",
+]
+
+
 @app.route("/api/chat", methods=["POST"])
 def chat():
     if not API_KEY:
         return jsonify({"error": "API Key not configured on the server."}), 500
 
-    data = request.get_json()
+    data = request.get_json(silent=True)
     if not data or "history" not in data:
         return jsonify({"error": "Invalid payload. 'history' is required."}), 400
 
     history = data["history"]
-    contents = []
 
-    # Map the frontend history format to the Gemini API format
-    for msg in history:
-        role = "user" if msg.get("role") == "user" else "model"
-        text = (msg.get("content") or msg.get("text") or "").strip()
-        if not text:
-            continue
+    # Find the latest user message so a previous failed/overloaded turn NEVER blocks the next question
+    latest_user_text = ""
+    for msg in reversed(history):
+        if msg.get("role") == "user":
+            latest_user_text = (msg.get("content") or msg.get("text") or "").strip()
+            if latest_user_text:
+                break
 
-        # 1. Skip the initial welcome message from the bot so contents ALWAYS starts with "user"
-        if not contents and role == "model":
-            continue
-
-        # 2. Skip error messages added to the UI so they don't corrupt conversation history
-        if role == "model" and (
-            text.startswith("Failed to generate")
-            or text.startswith("An internal server error")
-            or text.startswith("Unable to connect")
-        ):
-            continue
-
-        # 3. Ensure strict "user" <-> "model" alternation required by Google Gemini API
-        if contents and contents[-1]["role"] == role:
-            if role == "user":
-                contents[-1]["parts"] = [{"text": text}]
-            else:
-                contents[-1]["parts"][0]["text"] += "\n\n" + text
-        else:
-            contents.append({"role": role, "parts": [{"text": text}]})
-
-    if not contents:
+    if not latest_user_text:
         return jsonify({"error": "No user message found."}), 400
 
     system_context = load_system_context()
 
+    # Send a clean single-turn request with the full school_info.txt context.
+    # This prevents old error messages from ever breaking subsequent questions and saves API tokens!
     payload = {
         "systemInstruction": {
             "parts": [{"text": system_context}]
         },
-        "contents": contents
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": latest_user_text}]
+            }
+        ]
     }
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={API_KEY}"
     headers = {"Content-Type": "application/json"}
+    last_error = "Failed to generate a response from the AI."
 
-    try:
-        response = requests.post(url, headers=headers, data=json.dumps(payload))
-        response_data = response.json()
-
-        # If free-tier rate limit (429) is hit on back-to-back questions, wait 3 seconds and retry once
-        if response.status_code in (429, 503):
-            time.sleep(3)
-            response = requests.post(url, headers=headers, data=json.dumps(payload))
+    for model_name in MODELS_TO_TRY:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={API_KEY}"
+        try:
+            # 12-second timeout per model so Gunicorn's 30-second limit is NEVER reached
+            response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=12)
             response_data = response.json()
 
-        if "candidates" in response_data and len(response_data["candidates"]) > 0:
-            candidate = response_data["candidates"][0]
-            parts = candidate.get("content", {}).get("parts", [])
-            if parts and "text" in parts[0]:
-                reply = parts[0]["text"]
-                return jsonify({"reply": reply}), 200
-            else:
+            if "candidates" in response_data and len(response_data["candidates"]) > 0:
+                candidate = response_data["candidates"][0]
+                parts = candidate.get("content", {}).get("parts", [])
+                text_chunks = [p["text"] for p in parts if isinstance(p, dict) and p.get("text")]
+                if text_chunks:
+                    return jsonify({"reply": "".join(text_chunks)}), 200
                 return jsonify({
                     "reply": "I do not have that specific information in my official school records. Please contact the school office directly at 05248-222568 or stanthonybbk@yahoo.com."
                 }), 200
-        else:
-            print("API Error:", response_data)
-            err_msg = response_data.get("error", {}).get("message", "Failed to generate a response from the AI.")
-            return jsonify({"error": err_msg}), 502
-    except Exception as e:
-        print("Server Error:", str(e))
-        return jsonify({"error": "An internal server error occurred."}), 500
+            else:
+                last_error = response_data.get("error", {}).get("message", last_error)
+                print(f"Model {model_name} unavailable/busy: {last_error}")
+                # Immediately try the next model in MODELS_TO_TRY
+                continue
+        except requests.exceptions.Timeout:
+            print(f"Model {model_name} timed out after 12s, trying next model...")
+            continue
+        except Exception as e:
+            print(f"Error with {model_name}: {e}")
+            continue
+
+    return jsonify({"error": last_error}), 502
 
 
 if __name__ == "__main__":
-    # Run the server on port 5000
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
