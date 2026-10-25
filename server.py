@@ -33,7 +33,7 @@ def build_system_context(info: str) -> str:
         "Important rules:\n"
         "1. Do NOT dump huge raw paragraphs when a user asks a specific question. Give a clean, well-formatted, direct answer.\n"
         "2. When asked about the Principal or his message, state that the Principal is **Fr. Prakash Soreng** and share the **Principal's Message** section clearly.\n"
-        "3. Be smart with spelling variations and honorifics for teachers/staff (for example, 'Lily ma'am' or 'Lily' refers to **Mrs. Lilly Mishra** (PGT); 'Praveen' refers to **Ms. Rana Parveen** or **Ms. Kuba Parveen** (PRT/PPRT); 'Father' or 'Fr.' refers to priests/administration).\n"
+        "3. Be smart with spelling variations and honorifics for teachers/staff (for example, 'Lily ma'am', 'Lily', or 'Lily Mishra' refers to **Mrs. Lilly Mishra** (PGT); 'Praveen' refers to **Ms. Rana Parveen** or **Ms. Kuba Parveen** (PRT/PPRT); 'Father' or 'Fr.' refers to priests/administration).\n"
         "4. If a detail is genuinely not in the school information below, politely say: "
         "'I do not have that specific information in my official school records. Please contact the school office directly at 05248-222568 or stanthonybbk@yahoo.com.'\n\n"
         + info
@@ -55,21 +55,20 @@ def extract_sections(info: str):
 
 
 def find_staff_matches(query: str, info: str):
-    """Fuzzy/phonetic staff name matcher so 'lily ma'am' matches 'Mrs. Lilly Mishra' and 'Praveen' matches 'Ms. Rana Parveen' & 'Ms. Kuba Parveen'."""
+    """Exact, ranked staff name matcher so 'who is lily mishra' ONLY returns Mrs. Lilly Mishra and never matches random sentences."""
     q_lower = query.lower()
-    # Remove common conversational words and honorifics
     ignore = {
         "who", "what", "is", "are", "the", "about", "tell", "me", "maam", "ma", "am",
         "mam", "madam", "sir", "teacher", "staff", "faculty", "miss", "mrs", "mr",
         "ms", "dr", "fr", "father", "sister", "sr", "in", "of", "at", "school",
-        "anthony", "anthonys", "please", "know", "do", "you"
+        "anthony", "anthonys", "please", "know", "do", "you", "message", "his", "her"
     }
     tokens = [t for t in re.findall(r"[a-z]+", q_lower) if t not in ignore and len(t) >= 3]
     if not tokens:
         return []
 
     def normalize(word: str) -> str:
-        # Collapse double letters (e.g. "lilly" -> "lily") and common vowel/consonant swaps
+        # Collapse double letters ("lilly" -> "lily") and common spelling variations
         w = re.sub(r"(.)\1+", r"\1", word.lower())
         w = w.replace("parveen", "praveen").replace("praveen", "parveen")
         w = w.replace("shrivastav", "srivastav").replace("srivastava", "srivastav")
@@ -77,54 +76,68 @@ def find_staff_matches(query: str, info: str):
 
     norm_tokens = [normalize(t) for t in tokens]
 
-    # Known staff categories from school_info.txt
-    staff_entries = []
+    # Extract ONLY clean person names (starting with Mrs., Mr., Ms., Sr., Fr., Dr.) and their category
+    person_pattern = re.compile(
+        r"\b((?:Mrs?\.|Ms\.|Sr\.|Fr\.|Dr\.)\s+[A-Z][A-Za-z.\s]{2,35}?)(?=\s*(?:[,;.\n]|—|-|\(|$))"
+    )
+
+    candidates = []
+    seen_names = set()
+
+    # Determine role category based on surrounding section text
     for line in info.splitlines():
-        # Match names like Mrs. Lilly Mishra, Ms. Rana Parveen, Fr. Prakash Soreng, etc.
-        if any(prefix in line for prefix in ("Mrs.", "Mr.", "Ms.", "Sr.", "Fr.", "Dr.")):
-            # Extract role context if present on the line
-            staff_entries.append(line.strip())
+        line_s = line.strip()
+        if not line_s:
+            continue
 
-    matched_people = []
-    # Also parse individual names with their category (PGT, TGT, PRT/PPRT, Admin, Specialist)
-    current_category = "Faculty / Administration"
-    for sec_heading, sec_body, _ in extract_sections(info):
-        if any(k in sec_heading.lower() for k in ("staff", "faculty", "admin", "student council", "council")):
-            for line in sec_body.splitlines():
-                line_s = line.strip()
-                if not line_s:
+        # Split line into category chunks if PGT:, TGT:, PRT / PPRT:, Specialist staff: appear inline
+        chunks = re.split(r"(?=(?:PGT:|TGT:|PRT / PPRT:|Specialist staff:))", line_s)
+        for chunk in chunks:
+            role_label = "Faculty / Administration"
+            if chunk.startswith("PGT:"):
+                role_label = "Post Graduate Teacher (PGT)"
+            elif chunk.startswith("TGT:"):
+                role_label = "Trained Graduate Teacher (TGT)"
+            elif chunk.startswith("PRT / PPRT:"):
+                role_label = "Primary / Pre-Primary Teacher (PRT / PPRT)"
+            elif chunk.startswith("Specialist staff:"):
+                role_label = "Specialist Staff"
+
+            for match in person_pattern.finditer(chunk):
+                person_name = match.group(1).strip().rstrip(".,;:")
+                # Skip historical bishops/priests if already covered or keep clean role
+                if person_name in seen_names:
                     continue
-                # Split by category labels if inline
-                for part in re.split(r"(?=(?:PGT:|TGT:|PRT / PPRT:|Specialist staff:|Current administrative))", line_s):
-                    part = part.strip()
-                    if not part:
-                        continue
-                    if part.startswith("PGT:"):
-                        current_category = "Post Graduate Teacher (PGT)"
-                        part = part[len("PGT:"):].strip()
-                    elif part.startswith("TGT:"):
-                        current_category = "Trained Graduate Teacher (TGT)"
-                        part = part[len("TGT:"):].strip()
-                    elif part.startswith("PRT / PPRT:"):
-                        current_category = "Primary / Pre-Primary Teacher (PRT / PPRT)"
-                        part = part[len("PRT / PPRT:"):].strip()
-                    elif part.startswith("Specialist staff:"):
-                        current_category = "Specialist Staff"
-                        part = part[len("Specialist staff:"):].strip()
+                name_words = [
+                    normalize(w)
+                    for w in re.findall(r"[a-zA-Z]+", person_name)
+                    if w.lower() not in {"mrs", "mr", "ms", "sr", "fr", "dr"} and len(w) >= 3
+                ]
+                if not name_words:
+                    continue
 
-                    # Split comma/semicolon separated names
-                    for item in re.split(r"[;,]\s*|\.\s+(?=(?:Mrs?\.|Ms\.|Sr\.|Fr\.))", part):
-                        item_clean = item.strip().rstrip(".")
-                        if not item_clean:
-                            continue
-                        item_words = [normalize(w) for w in re.findall(r"[a-zA-Z]+", item_clean)]
-                        for nt in norm_tokens:
-                            if any(nt == iw or (len(nt) >= 4 and (nt in iw or iw in nt)) for iw in item_words):
-                                entry = f"- **{item_clean}** ({current_category})"
-                                if entry not in matched_people:
-                                    matched_people.append(entry)
+                # Count how many query tokens match this person's actual name words
+                matched_count = 0
+                for nt in norm_tokens:
+                    if any(nt == nw or (len(nt) >= 4 and len(nw) >= 4 and (nt in nw or nw in nt)) for nw in name_words):
+                        matched_count += 1
 
-    return matched_people
+                if matched_count > 0:
+                    seen_names.add(person_name)
+                    candidates.append((matched_count, person_name, role_label))
+
+    if not candidates:
+        return []
+
+    # Keep ONLY the highest-scoring matches (e.g., if user typed "lily mishra" (2 words),
+    # ONLY return Mrs. Lilly Mishra (score 2), NOT other teachers named Mishra (score 1)!)
+    max_score = max(c[0] for c in candidates)
+    best_matches = [
+        f"**{name}** is a **{role}** at St. Anthony's Sr. Sec. School, Barabanki."
+        for score, name, role in candidates
+        if score == max_score
+    ]
+    return best_matches
 
 
 def local_school_info_answer(query: str, info: str) -> str:
@@ -140,7 +153,7 @@ def local_school_info_answer(query: str, info: str) -> str:
             "**School Timings**, **Admissions**, **School Uniform**, **Student Council**, **Faculty & Staff**, or **School Rules**!"
         )
 
-    # 2. Principal & Principal's Message (Concise, NOT the huge staff paragraph!)
+    # 2. Principal & Principal's Message
     if any(k in q for k in ("principal", "prakash", "soreng")):
         principal_msg = ""
         for heading, body, _ in sections:
@@ -148,30 +161,23 @@ def local_school_info_answer(query: str, info: str) -> str:
                 principal_msg = body.strip()
                 break
 
-        # If they specifically asked for the Principal's message or both Principal and his message
         if "message" in q or principal_msg:
-            msg_block = (
-                f"\n\n### Principal's Message\n{principal_msg}"
-                if principal_msg
-                else ""
-            )
+            msg_block = f"\n\n### Principal's Message\n{principal_msg}" if principal_msg else ""
             return (
                 "The Principal of St. Anthony's Sr. Sec. School, Barabanki is **Fr. Prakash Soreng** (2025 – Present)."
                 + msg_block
             )
-        return (
-            "The Principal of St. Anthony's Sr. Sec. School, Barabanki is **Fr. Prakash Soreng** (serving from 2025 to present)."
-        )
+        return "The Principal of St. Anthony's Sr. Sec. School, Barabanki is **Fr. Prakash Soreng** (serving from 2025 to present)."
 
-    # 3. Specific Teacher / Staff / Council Member Lookup (handles "lily ma'am", "praveen", etc.)
+    # 3. Specific Teacher / Staff Lookup (e.g. "who is lily mishra", "who is lily ma'am", "who is Praveen")
     staff_matches = find_staff_matches(query, info)
     if staff_matches and not any(k in q for k in ("timing", "uniform", "fee", "admission", "stream", "syllabus", "history")):
         if len(staff_matches) == 1:
-            return f"Based on our official school records:\n\n{staff_matches[0]} at **St. Anthony's Sr. Sec. School, Barabanki**."
+            return f"Based on our official school records, {staff_matches[0]}"
         else:
             return (
-                "Based on our official school records at **St. Anthony's Sr. Sec. School, Barabanki**, here are the matching staff/council members:\n\n"
-                + "\n".join(staff_matches)
+                "Based on our official school records, here are the matching faculty members:\n\n"
+                + "\n".join(f"- {m}" for m in staff_matches)
             )
 
     # 4. School Timings
@@ -293,7 +299,6 @@ def chat():
         }
     }
 
-    # Send API key in both URL query and X-goog-api-key header so both AIzaSy and AQ. keys work fast
     headers = {
         "Content-Type": "application/json",
         "X-goog-api-key": API_KEY or "",
@@ -306,7 +311,6 @@ def chat():
                 response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=12)
                 response_data = response.json()
 
-                # If a model doesn't accept thinkingConfig, retry immediately without generationConfig
                 if response.status_code == 400 and "thinkingConfig" in json.dumps(response_data):
                     simple_payload = {
                         "systemInstruction": payload["systemInstruction"],
