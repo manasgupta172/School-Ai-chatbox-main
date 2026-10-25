@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -48,13 +49,35 @@ def chat():
     contents = []
 
     # Map the frontend history format to the Gemini API format
-    # Frontend format: { "role": "user" | "ai", "content": "..." }
     for msg in history:
         role = "user" if msg.get("role") == "user" else "model"
         text = (msg.get("content") or msg.get("text") or "").strip()
         if not text:
             continue
-        contents.append({"role": role, "parts": [{"text": text}]})
+
+        # 1. Skip the initial welcome message from the bot so contents ALWAYS starts with "user"
+        if not contents and role == "model":
+            continue
+
+        # 2. Skip error messages added to the UI so they don't corrupt conversation history
+        if role == "model" and (
+            text.startswith("Failed to generate")
+            or text.startswith("An internal server error")
+            or text.startswith("Unable to connect")
+        ):
+            continue
+
+        # 3. Ensure strict "user" <-> "model" alternation required by Google Gemini API
+        if contents and contents[-1]["role"] == role:
+            if role == "user":
+                contents[-1]["parts"] = [{"text": text}]
+            else:
+                contents[-1]["parts"][0]["text"] += "\n\n" + text
+        else:
+            contents.append({"role": role, "parts": [{"text": text}]})
+
+    if not contents:
+        return jsonify({"error": "No user message found."}), 400
 
     system_context = load_system_context()
 
@@ -65,12 +88,18 @@ def chat():
         "contents": contents
     }
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={API_KEY}"
     headers = {"Content-Type": "application/json"}
 
     try:
         response = requests.post(url, headers=headers, data=json.dumps(payload))
         response_data = response.json()
+
+        # If free-tier rate limit (429) is hit on back-to-back questions, wait 3 seconds and retry once
+        if response.status_code in (429, 503):
+            time.sleep(3)
+            response = requests.post(url, headers=headers, data=json.dumps(payload))
+            response_data = response.json()
 
         if "candidates" in response_data and len(response_data["candidates"]) > 0:
             candidate = response_data["candidates"][0]
@@ -84,7 +113,8 @@ def chat():
                 }), 200
         else:
             print("API Error:", response_data)
-            return jsonify({"error": "Failed to generate a response from the AI."}), 502
+            err_msg = response_data.get("error", {}).get("message", "Failed to generate a response from the AI.")
+            return jsonify({"error": err_msg}), 502
     except Exception as e:
         print("Server Error:", str(e))
         return jsonify({"error": "An internal server error occurred."}), 500
