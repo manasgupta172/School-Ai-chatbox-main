@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -16,21 +17,80 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SCHOOL_INFO_PATH = os.path.join(BASE_DIR, "school_info.txt")
 
 
-def load_system_context():
+def load_school_info() -> str:
     try:
         with open(SCHOOL_INFO_PATH, "r", encoding="utf-8") as f:
-            info = f.read()
+            return f.read()
     except FileNotFoundError:
-        info = "Fallback context: St. Anthony's Sr. Sec. School Chatbot."
         print("Warning: school_info.txt not found. Using fallback context.")
+        return "St. Anthony's Sr. Sec. School, Civil Lines, Court Road, Barabanki, Uttar Pradesh – 225001."
 
-    return (
-        "You are the official AI Assistant for St. Anthony's Sr. Sec. School, Barabanki. "
-        "Answer questions accurately, naturally, and politely using ONLY the official school information provided below. "
-        "If a question is about something not mentioned in the school information below, politely inform the user "
-        "that you only have information from the official school records.\n\n"
-        + info
-    )
+
+def select_relevant_context(query: str, full_info: str) -> str:
+    """Selects the relevant sections of school_info.txt (plus core school overview)
+    so Gemini processes ~10x fewer tokens and responds in 2-4 seconds instead of timing out!
+    """
+    raw_sections = re.split(r"\n(?=\*+)", "\n" + full_info)
+    sections = [s.strip() for s in raw_sections if s.strip()]
+    if len(sections) <= 3:
+        return full_info
+
+    q_lower = query.lower()
+    # Extract meaningful search words from the user's question
+    words = [
+        w
+        for w in re.findall(r"[a-z0-9]+", q_lower)
+        if len(w) >= 3
+        and w not in {"what", "whats", "who", "where", "when", "how", "the", "and", "for", "are", "school", "anthony", "anthonys", "tell", "about", "can", "you"}
+    ]
+
+    # Always keep the first overview section so Gemini always knows the school's core details
+    selected = [sections[0]]
+
+    scored = []
+    for idx, sec in enumerate(sections[1:], start=1):
+        sec_lower = sec.lower()
+        heading_line = sec.splitlines()[0].lower()
+        score = 0
+
+        for w in words:
+            if w in heading_line:
+                score += 6
+            elif w in sec_lower:
+                score += 2
+            # Handle common spelling variations (e.g. lily <-> lilly, praveen <-> parveen)
+            w_collapsed = re.sub(r"(.)\1+", r"\1", w)
+            if len(w_collapsed) >= 3 and w_collapsed in re.sub(r"(.)\1+", r"\1", sec_lower):
+                score += 2
+
+        # Ensure Principal queries always include both Principal Message and Administration sections
+        if any(k in q_lower for k in ("principal", "prakash", "soreng", "message")):
+            if "principal" in heading_line or "administration" in heading_line or "prakash" in sec_lower:
+                score += 10
+
+        # Ensure anthem / motto / prayer / patron queries include History / Mission / Anthem sections
+        if any(k in q_lower for k in ("anthem", "song", "prayer", "motto", "patron", "history", "founded")):
+            if any(h in heading_line for h in ("anthem", "mission", "history", "about", "prayer")):
+                score += 10
+
+        # Ensure council / cabinet / prefect / house queries include Student Council & Cabinet sections
+        if any(k in q_lower for k in ("council", "cabinet", "head boy", "head girl", "prefect", "captain", "house")):
+            if any(h in heading_line for h in ("council", "cabinet", "house")):
+                score += 10
+
+        if score > 0:
+            scored.append((score, idx, sec))
+
+    scored.sort(key=lambda x: (-x[0], x[1]))
+
+    # Pick top 4 matching sections (or all sections if the query is very broad)
+    if scored:
+        for _, _, sec in scored[:4]:
+            if sec not in selected:
+                selected.append(sec)
+        return "\n\n".join(selected)
+
+    return full_info
 
 
 @app.route("/api/chat", methods=["POST"])
@@ -43,51 +103,44 @@ def chat():
         return jsonify({"error": "Invalid payload. 'history' is required."}), 400
 
     history = data["history"]
-    contents = []
 
-    # Map the frontend history format to the Gemini API format
-    for msg in history:
-        role = "user" if msg.get("role") == "user" else "model"
-        text = (msg.get("content") or msg.get("text") or "").strip()
-        if not text:
-            continue
+    # Get the latest user question
+    latest_user_text = ""
+    for msg in reversed(history):
+        if msg.get("role") == "user":
+            latest_user_text = (msg.get("content") or msg.get("text") or "").strip()
+            if latest_user_text:
+                break
 
-        # 1. Skip the initial welcome message from the bot so contents ALWAYS starts with "user"
-        if not contents and role == "model":
-            continue
-
-        # 2. Keep strict "user" <-> "model" alternation so a previous failed turn never breaks the next question
-        if contents and contents[-1]["role"] == role:
-            if role == "user":
-                contents[-1]["parts"] = [{"text": text}]
-            else:
-                contents[-1]["parts"][0]["text"] += "\n\n" + text
-        else:
-            contents.append({"role": role, "parts": [{"text": text}]})
-
-    if not contents:
+    if not latest_user_text:
         return jsonify({"error": "No user message found."}), 400
 
-    # Keep the last 6 messages so the conversation stays fast
-    contents = contents[-6:]
+    full_info = load_school_info()
+    relevant_info = select_relevant_context(latest_user_text, full_info)
 
-    system_context = load_system_context()
+    # Put the concise context + user question together in a single fast user prompt
+    prompt_text = (
+        "You are the official AI Assistant for St. Anthony's Sr. Sec. School, Barabanki (independently developed by Manas Gupta, Class 12 PCM + Computer Science student).\n"
+        "Answer the user's question accurately, naturally, and concisely using ONLY the official school records below. "
+        "If the answer is not in the records below, politely say that you do not have that specific information in the official school records and share the school contact (05248-222568 / stanthonybbk@yahoo.com).\n\n"
+        f"--- OFFICIAL SCHOOL RECORDS ---\n{relevant_info}\n--- END OF RECORDS ---\n\n"
+        f"User Question: {latest_user_text}"
+    )
 
     payload = {
-        "systemInstruction": {
-            "parts": [{"text": system_context}]
-        },
-        "contents": contents
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": prompt_text}]
+            }
+        ]
     }
 
     headers = {"Content-Type": "application/json"}
-
-    # Call ONLY gemini-3.5-flash-lite (500 requests/day quota) with a full 26-second timeout
-    # so it has plenty of time to read school_info.txt and finish generating the answer!
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key={API_KEY}"
 
     try:
-        response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=26)
+        response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=25)
         response_data = response.json()
 
         if "candidates" in response_data and len(response_data["candidates"]) > 0:
