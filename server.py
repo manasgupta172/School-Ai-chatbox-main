@@ -1,6 +1,5 @@
 import os
 import json
-import time
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -34,13 +33,12 @@ def load_system_context():
     )
 
 
-# Ordered list of Gemini models:
-# Automatically falls back to gemini-3.5-flash-lite if gemini-3.8-flash / gemini-3.6-flash / gemini-3.5-flash reach their rate limit or high demand
+# Put gemini-3.5-flash-lite FIRST (500 requests/day & 15 RPM on free tier!)
+# followed by gemini-3.5-flash and gemini-3.8-flash
 GEMINI_MODELS = (
-    "gemini-3.8-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-3.8-flash",
 )
 
 
@@ -79,7 +77,7 @@ def chat():
     if not contents:
         return jsonify({"error": "No user message found."}), 400
 
-    # Keep the last 6 messages so the conversation stays fast and never hits Gunicorn's 30s timeout
+    # Keep the last 6 messages so the conversation stays fast
     contents = contents[-6:]
 
     system_context = load_system_context()
@@ -94,11 +92,11 @@ def chat():
     headers = {"Content-Type": "application/json"}
     last_error = "Failed to generate a response from the AI."
 
-    # 100% Real Gemini AI ONLY — tries models in order and falls back to gemini-3.5-flash-lite if limits are reached
+    # Short 8-second timeout per model so Gunicorn's 30s limit is NEVER exceeded
     for model_name in GEMINI_MODELS:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={API_KEY}"
         try:
-            response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=15)
+            response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=8)
             response_data = response.json()
 
             if "candidates" in response_data and len(response_data["candidates"]) > 0:
@@ -114,7 +112,6 @@ def chat():
                 if text_chunks:
                     return jsonify({"reply": "".join(text_chunks)}), 200
 
-            # If this model hit its rate limit (429), high demand (503), or isn't available, immediately try the next model
             last_error = response_data.get("error", {}).get("message", last_error)
             print(f"API Error with {model_name} (status {response.status_code}):", last_error)
             continue
