@@ -33,15 +33,6 @@ def load_system_context():
     )
 
 
-# Put gemini-3.5-flash-lite FIRST (500 requests/day & 15 RPM on free tier!)
-# followed by gemini-3.5-flash and gemini-3.8-flash
-GEMINI_MODELS = (
-    "gemini-3.5-flash-lite",
-    "gemini-3.5-flash",
-    "gemini-3.8-flash",
-)
-
-
 @app.route("/api/chat", methods=["POST"])
 def chat():
     if not API_KEY:
@@ -90,37 +81,34 @@ def chat():
     }
 
     headers = {"Content-Type": "application/json"}
-    last_error = "Failed to generate a response from the AI."
 
-    # Short 8-second timeout per model so Gunicorn's 30s limit is NEVER exceeded
-    for model_name in GEMINI_MODELS:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={API_KEY}"
-        try:
-            response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=8)
-            response_data = response.json()
+    # Call ONLY gemini-3.5-flash-lite (500 requests/day quota) with a full 26-second timeout
+    # so it has plenty of time to read school_info.txt and finish generating the answer!
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key={API_KEY}"
 
-            if "candidates" in response_data and len(response_data["candidates"]) > 0:
-                candidate = response_data["candidates"][0]
-                parts = candidate.get("content", {}).get("parts", [])
-                text_chunks = [
-                    p["text"]
-                    for p in parts
-                    if isinstance(p, dict) and p.get("text") and not p.get("thought")
-                ]
-                if not text_chunks:
-                    text_chunks = [p["text"] for p in parts if isinstance(p, dict) and p.get("text")]
-                if text_chunks:
-                    return jsonify({"reply": "".join(text_chunks)}), 200
+    try:
+        response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=26)
+        response_data = response.json()
 
-            last_error = response_data.get("error", {}).get("message", last_error)
-            print(f"API Error with {model_name} (status {response.status_code}):", last_error)
-            continue
-        except Exception as e:
-            last_error = str(e)
-            print(f"Server Error with {model_name}:", last_error)
-            continue
+        if "candidates" in response_data and len(response_data["candidates"]) > 0:
+            candidate = response_data["candidates"][0]
+            parts = candidate.get("content", {}).get("parts", [])
+            text_chunks = [
+                p["text"]
+                for p in parts
+                if isinstance(p, dict) and p.get("text") and not p.get("thought")
+            ]
+            if not text_chunks:
+                text_chunks = [p["text"] for p in parts if isinstance(p, dict) and p.get("text")]
+            if text_chunks:
+                return jsonify({"reply": "".join(text_chunks)}), 200
 
-    return jsonify({"error": last_error}), 502
+        last_error = response_data.get("error", {}).get("message", "Failed to generate a response from the AI.")
+        print("API Error:", response_data)
+        return jsonify({"error": last_error}), 502
+    except Exception as e:
+        print("Server Error:", str(e))
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":
