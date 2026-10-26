@@ -35,12 +35,14 @@ def load_system_context():
 
 
 # Ordered list of Gemini models:
-# Automatically falls back to gemini-3.5-flash-lite if gemini-3.8-flash / gemini-3.6-flash / gemini-3.5-flash reach their rate limit or high demand
+# Uses Gemini 3.5 Flash Lite and Gemini 3.1 Flash Lite first (highest free quota & fastest response)
+# with fallback to Gemini 3.8 Flash, Gemini 3.6 Flash, and Gemini 3.5 Flash
 GEMINI_MODELS = (
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
     "gemini-3.8-flash",
     "gemini-3.6-flash",
     "gemini-3.5-flash",
-    "gemini-3.5-flash-lite",
 )
 
 
@@ -79,7 +81,7 @@ def chat():
     if not contents:
         return jsonify({"error": "No user message found."}), 400
 
-    # Keep the last 6 messages so the conversation stays fast and never hits Gunicorn's 30s timeout
+    # Keep the last 6 messages so the conversation stays clean
     contents = contents[-6:]
 
     system_context = load_system_context()
@@ -94,11 +96,11 @@ def chat():
     headers = {"Content-Type": "application/json"}
     last_error = "Failed to generate a response from the AI."
 
-    # 100% Real Gemini AI ONLY — tries models in order and falls back to gemini-3.5-flash-lite if limits are reached
+    # 100% Real Gemini AI ONLY — with extended 90-second timeout so responses are never cut off early
     for model_name in GEMINI_MODELS:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={API_KEY}"
         try:
-            response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=15)
+            response = requests.post(url, headers=headers, data=json.dumps(payload), timeout=90)
             response_data = response.json()
 
             if "candidates" in response_data and len(response_data["candidates"]) > 0:
