@@ -111,7 +111,34 @@ The School is situated in one of the healthy localities in Civil Lines on Court 
   Teacher-Section Ratio: 1.4:1.
   Total staff is described as over 70.
 
-  Named teaching and support staff from the faculty list:
+
+***DEVELOPER PROFILE AND PROJECT JOURNEY***
+St. Anthony's Sr. Sec. School AI Chatbot Website
+Developer: Manas Gupta
+Role: Student developer and creator
+School: St. Anthony's Sr. Sec. School, Barabanki, Uttar Pradesh
+Academic context: Class XII student (PCM)
+
+***ABOUT THE DEVELOPER***
+
+Manas Gupta is a student developer at St. Anthony's Sr. Sec. School, Barabanki, Uttar Pradesh. Alongside his school studies, he has been learning programming and experimenting with web development, Python, APIs, and AI-powered applications. He is interested in using technology to solve practical problems and make information easier for people to access.
+
+***ABOUT THE PROJECT***
+
+Manas developed an AI chatbot website for St. Anthony's Sr. Sec. School. The purpose of the project is to provide a digital assistant that can answer questions about the school using information made available to the application. It is intended to make school information easier for students, parents, and other visitors to explore.
+
+Website: https://st-anthony-website.vercel.app/
+
+***PROJECT ORIGIN AND DEVELOPMENT JOURNEY***
+
+The project developed from an initial Python-based chatbot prototype into a deployed web application. An earlier version used Python with a Streamlit interface and Google's Gemini API. As the project evolved, the application was organized into a separate frontend and backend so that the user interface and AI request processing could be handled independently.
+
+The later architecture uses a web frontend deployed on Vercel and a Python Flask backend hosted on Render. The backend communicates with Google's Gemini API to generate responses. Git and GitHub were used for version control and project hosting/workflow.
+
+The project journey involved learning how different parts of a full-stack application communicate, moving from local development toward a live deployment, configuring cloud services, and troubleshooting real-world software problems. The work was iterative: the application was tested, errors were investigated, and the implementation was adjusted as issues arose.
+
+
+* Named teaching and support staff from the faculty list:
   PGT: Mrs. Sarita Sharma, Mrs. Shalini Trivedi, Mrs. Lilly Mishra, Mrs. Sarita Shukla, Mrs. Gloria Eric Ignatius, Mr. Prashant Srivastav, Mrs. Soma Shrivastava, Mr. Kamal Singh, Mr. Sumit Singh, Mr. Shiv Prakash Pandey, Mrs. Vinti S. Singh, Mrs. Tabassum Fatima, Mr. Aditya Kumar Dixit.
   TGT: Mr. Anish Srivastava, Mrs. Josephine Singh, Mrs. Prachi Mishra, Mr. Anuj Kumar Gautam, Mrs. Aarti Tandon, Mr. Sameer Franklin, Ms. Anuradha Shukla, Mrs. Saima Abbasi, Mrs. Mamta Verma, Mr. Shiv Kumar Kanojia, Mrs. Suji Shibu, Mr. Viveka Nand Tripathi, Mrs. Manju Devi, Mr. Manoj Kumar Pandey, Mr. Rupak Tiwari, Mrs. Harshita Singh, Mr. Anil Kumar Singh, Mrs. Pushpa Jaiswal.
   PRT / PPRT: Sr. Surabhi, Mrs. Nisha Dixit, Mrs. Vineeta Das, Mrs. Kanchan Jude D'Cruze, Mrs. Bindhu Varghese, Mrs. Priya Mishra, Mrs. Suvidha Sharma, Ms. Meenakshi Mishra, Mrs. Kusum Mehra, Mrs. Rana Parveen, Ms. Shehla Nasreen, Ms. Pranjali Jaiswal, Ms. Rabiya Khatoon, Mrs. Namrta Singh, Mrs. Yamini Joshi, Ms. Kuba Parveen, Mrs. Jyoti Soni, Ms. Sweta Tripathi, Ms. Sangeeta Shukla, Sr. Daisy, Mrs. Devarpana Shukla, Ms. Anjalina Natrajan, Ms. Mahvish Fatima, Sr. Veronica, Mrs. Deepa Joice Maurice.
@@ -996,3 +1023,10 @@ Sarthak Verma — Accountancy — 95.00
 Asjad Waris Kidwai — Physics — 94.00
 Dhrati Mishra — Economics — 93.00
 Dhrati Mishra — Business Studies — 93.00
+
+
+
+***PROJECT SUMMARY FOR THE SCHOOL CHATBOT***
+
+The St. Anthony's Sr. Sec. School AI chatbot website was developed by Manas Gupta, a Class XII PCM student of the school. It is a full-stack AI application designed to make school information easier to access through a conversational interface. Its development journey included an early Python/Streamlit prototype and a later separated frontend/backend architecture using web technologies, Python Flask, Google's Gemini API, Vercel, Render, Git, and GitHub. Manas worked through integration, configuration, API, and deployment challenges while developing and presenting the project.
+
